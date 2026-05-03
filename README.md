@@ -1,56 +1,49 @@
 # to-see-my-life
 
-`to-see-my-life` 是一個本地優先的 Rust CLI 工具，用來在終端中完成三件事：
+`to-see-my-life` 是一個本地優先的 Rust CLI 工具，用來在終端中管理時間和回顧：
 
-- 記錄每日回顧，並生成 Markdown 文件
-- 創建帶開始時間和持續時間的 todo
+- 記錄每日回顧，並生成 Markdown 文件（含自動 todo 摘要）
+- 創建帶時間段的 todo，支持 cancel / delete / edit / reschedule
 - 使用終端倒計時界面執行 todo timer 或 standalone timer
+- 查看今日計畫、本週統計
 
-命令行入口名稱是：
+命令行入口名稱：
 
 ```powershell
 tsml.exe
 ```
 
-第一版的設計重點是簡單、可攜帶、無後台服務。timer 只在終端程序運行時生效；程序退出後不會繼續在後台計時。
+設計重點是簡單、可攜帶、無後台服務。
 
 ## Project Status
 
 目前已實作：
 
 - `init`：初始化本地配置
-- `config show`：查看配置
-- `config set-notes-dir`：修改 Markdown 輸出目錄
-- `review`：互動式生成每日回顧 Markdown
-- `todo add`：創建可預約 todo
-- `todo list`：按開始時間查看 todo
-- `todo done`：標記 todo 完成
-- `timer`：為當前/下一個 todo 啟動倒計時
-- `timer --duration`：啟動 standalone timer
+- `config show` / `config set-notes-dir`：配置管理
+- `review`：互動式每日回顧 Markdown（含今日 todo 摘要）
+- `todo add / list / done / cancel / delete / edit / reschedule`：完整 todo 管理
+- `todo add / edit / reschedule --force`：繞過時間重疊檢查
+- `timer`：為當前或下一個 todo 啟動倒計時 TUI
+- `timer --duration 25m --plain --no-notify`：standalone timer，支持純文本模式
+- `today`：顯示今日計畫
+- `stats --week`：本週統計
+- `TSML_HOME` 環境變量：覆蓋數據目錄
 
-目前尚未實作：
+已落地的自動化測試：
 
-- 後台常駐計時
-- 開機自啟或系統任務調度
-- todo 編輯、取消、刪除
-- 自定義 review 模板
-- 完整 E2E 自動化測試
+- 10 個 unit tests（時間解析、格式、邊界錯誤）
+- 11 個 E2E 整合測試（init、todo CRUD、overlap、today、stats、timer plain）
 
 ## Build
 
-開發環境需要 Rust toolchain。
+需要 Rust toolchain。
 
 ```powershell
 cargo build --release
 ```
 
-成功後會生成：
-
-```text
-target/release/tsml.exe
-```
-
-也可以在開發時直接使用：
+開發使用：
 
 ```powershell
 cargo run -- <command>
@@ -64,36 +57,38 @@ cargo run -- todo list
 
 ## Data Layout
 
-本項目不把配置寫入系統級配置目錄，而是寫在 `tsml.exe` 同目錄下的 `.config` 文件夾。
+### 默認（portable）模式
 
-如果 binary 位於：
-
-```text
-D:/Mycodes/tsml/target/release/tsml.exe
-```
-
-則配置和數據位於：
+配置和數據寫在 `tsml.exe` 同目錄下的 `.config` 文件夾：
 
 ```text
-D:/Mycodes/tsml/target/release/.config/
-```
-
-目錄結構：
-
-```text
-.config/
+<exe 目錄>/.config/
   config.toml
   todos.json
   notes/
 ```
 
-`config.toml` 保存 Markdown 輸出目錄：
+### TSML_HOME 模式
 
-```toml
-notes_dir = "D:\\Mycodes\\tsml\\target\\release\\.config\\notes"
+設定環境變量 `TSML_HOME` 後，所有數據文件位於 `TSML_HOME` 目錄下，`.config` 子目錄不會附加：
+
+```powershell
+$env:TSML_HOME = "D:\my-tsml-data"
+tsml.exe config show
+# 讀取 D:\my-tsml-data\config.toml
 ```
 
-`todos.json` 保存 todo 數據：
+此模式主要用於測試隔離或高級用戶。
+
+### 文件格式
+
+`config.toml`：
+
+```toml
+notes_dir = "D:\\path\\to\\notes"
+```
+
+`todos.json`：
 
 ```json
 [
@@ -110,364 +105,96 @@ notes_dir = "D:\\Mycodes\\tsml\\target\\release\\.config\\notes"
 ]
 ```
 
-todo 狀態包括：
-
-```text
-scheduled
-active
-done
-cancelled
-expired
-```
+todo 狀態：`scheduled`, `active`（即時計算）, `done`, `cancelled`, `expired`（即時計算）。
 
 ## Commands
 
-查看所有命令：
+### init
 
-```powershell
-tsml.exe --help
-```
-
-目前只保留子命令，不提供短參數別名。
-
-## init
-
-初始化 `.config`、`config.toml` 和 `todos.json`。
+初始化配置和數據文件。
 
 ```powershell
 tsml.exe init
 ```
 
-程序會詢問 Markdown notes 目錄：
-
-```text
-Markdown notes directory:
-```
-
-如果直接按 Enter，會使用默認目錄：
-
-```text
-<tsml.exe 所在目錄>/.config/notes
-```
-
-生成內容：
-
-```text
-.config/config.toml
-.config/todos.json
-```
-
-## config
-
-### config show
-
-查看當前配置和 todo 數據文件位置。
+### config
 
 ```powershell
 tsml.exe config show
-```
-
-輸出示例：
-
-```text
-config: D:\...\target\release\.config\config.toml
-notes_dir: D:\...\target\release\.config\notes
-todos: D:\...\target\release\.config\todos.json
-```
-
-### config set-notes-dir
-
-修改每日回顧 Markdown 的輸出目錄。
-
-```powershell
 tsml.exe config set-notes-dir "D:\Obsidian vault\daily"
 ```
 
-如果目錄不存在，程序會詢問是否創建。
+### review
 
-## review
-
-互動式每日回顧，回答幾個問題後生成 Markdown。
+互動式生成每日回顧，末尾自動追加今日 todo 摘要（完成/過期/未完成數量與列表）。
 
 ```powershell
 tsml.exe review
 ```
 
-問題包括：
+### todo
 
-```text
-今天做了什麼
-完成了什麼目標
-心情如何
-明天想做什麼
-```
-
-生成文件名：
-
-```text
-YYYY-MM-DD-daily-review.md
-```
-
-生成內容示例：
-
-```markdown
-# Daily Review - 2026-05-02
-
-## 今天做了什麼？
-
-寫了 tsml 第一版。
-
-## 完成了什麼目標？
-
-完成 CLI 骨架、todo JSON 和 timer。
-
-## 心情如何？
-
-平靜。
-
-## 明天想做什麼？
-
-補 E2E 測試。
-```
-
-如果尚未初始化配置，`review` 會先觸發初始化流程。
-
-## todo
-
-`todo` 用於管理帶時間段的任務。它更接近 time blocking，而不是普通任務清單。
-
-每個 todo 都有：
-
-- title
-- start time
-- end time
-- duration
-- status
-- focused minutes
-
-### todo add
-
-創建一個 todo。
+每個 todo 包含 title、start time、end time、duration、status、focused minutes。
 
 ```powershell
-tsml.exe todo add
-```
-
-不帶參數時會互動式詢問：
-
-```text
-Todo title:
-Start time:
-Duration:
-```
-
-也可以直接傳參：
-
-```powershell
+tsml.exe todo add                                    # 互動式
 tsml.exe todo add "寫 Rust CLI" --start 14:00 --duration 1h
+tsml.exe todo add "任務" --start now --duration 30m --force   # 繞過重疊檢查
+
+tsml.exe todo list                                   # 未完成
+tsml.exe todo list --all                             # 包含已完成和取消
+
+tsml.exe todo done <id>
+tsml.exe todo cancel <id>                            # 取消，保留歷史
+tsml.exe todo delete <id>                            # 永久刪除（需確認）
+tsml.exe todo delete <id> --yes                      # 跳過確認
+
+tsml.exe todo edit <id> --title "新標題"
+tsml.exe todo edit <id> --start 15:00 --duration 1h --force
+
+tsml.exe todo reschedule <id> --start 15:00          # 只改時間
+tsml.exe todo reschedule <id> --start now --duration 45m --force
 ```
 
-支持的開始時間格式：
+支持的開始時間格式：`now`, `14:00`, `14.00`, `2026-05-02 14:00`。
 
-```text
-now
-14:00
-14.00
-2026-05-02 14:00
-```
+支持的 duration 格式：`30`（分鐘）, `30m`, `1h`, `1h30m`, `10s`（用於測試）。
 
-支持的 duration 格式：
-
-```text
-30
-30m
-1h
-1h30m
-```
-
-如果只輸入數字，會被當作分鐘。
-
-示例：
+### timer
 
 ```powershell
-tsml.exe todo add "午睡" --start 13:45 --duration 30m
-```
-
-這會創建一個從 `13:45` 到 `14:15` 的 todo。
-
-### todo list
-
-查看未完成 todo。
-
-```powershell
-tsml.exe todo list
-```
-
-輸出會按開始時間排序：
-
-```text
-a1b2c3d4  scheduled  2026-05-02 13:45-14:15  30m      午睡
-b2c3d4e5  scheduled  2026-05-02 14:30-15:30  1h00m    寫 Rust CLI
-```
-
-默認不顯示 `done` 和 `cancelled`。
-
-查看全部 todo：
-
-```powershell
-tsml.exe todo list --all
-```
-
-### todo done
-
-標記 todo 完成。
-
-```powershell
-tsml.exe todo done <todo-id>
-```
-
-示例：
-
-```powershell
-tsml.exe todo done a1b2c3d4
-```
-
-如果不提供 id，程序會讓你從未完成 todo 中選擇：
-
-```powershell
-tsml.exe todo done
-```
-
-完成後：
-
-- `status` 變為 `done`
-- `focused_minutes` 設為 `duration_minutes`
-
-## timer
-
-`timer` 有兩種模式：
-
-1. todo timer
-2. standalone timer
-
-### todo timer
-
-不提供 `--duration` 時，`timer` 會從 `todos.json` 中尋找要執行的 todo。
-
-```powershell
-tsml.exe timer
-```
-
-選擇邏輯：
-
-1. 如果當前時間位於某個 todo 的 `start` 和 `end` 之間，使用該 todo
-2. 否則選擇下一個尚未開始的 todo
-3. 如果沒有可用 todo，返回錯誤
-
-如果選中的是未來 todo，界面會顯示距離開始還有多久。
-
-如果選中的是當前 todo，界面會顯示剩餘時間和已專注時間。
-
-TUI 操作：
-
-```text
-q   退出
-Esc 退出
-```
-
-到截止時間後：
-
-- 發出系統通知
-- 離開 TUI
-- 詢問是否把 todo 標記完成
-
-### standalone timer
-
-沒有 todo 時，也可以啟動一個單獨 timer。
-
-```powershell
+tsml.exe timer                             # 自動選當前或下一個 todo
+tsml.exe timer --duration 25m              # standalone
 tsml.exe timer --title "休息" --duration 10m
+tsml.exe timer --duration 1s --plain --no-notify   # 純文本 + 無通知（測試用）
 ```
 
-也可以省略 title：
+選擇邏輯：若當前時間落在某 todo 的時間段內則使用該 todo，否則選下一個未來 todo。
+
+TUI 顯示：標題、階段（Scheduled/Focus）、開始-結束時間、剩餘時間、已專注時間、當前時間。
+
+操作：`q` 或 `Esc` 退出。
+
+到截止時間後會發出系統通知；若綁定 todo，詢問是否標記完成。
+
+### today
+
+顯示今天的 todo 概覽：總預估時間、已專注、完成/過期/未完成/取消數量、下一個任務、詳細列表。
 
 ```powershell
-tsml.exe timer --duration 25m
+tsml.exe today
 ```
 
-這會啟動一個不寫入 `todos.json` 的倒計時。
+### stats --week
 
-standalone timer 適合：
+顯示本週統計：總任務數、完成/過期/未完成/取消、計畫時間、已專注、最常出現的任務標題。
 
-- 休息
-- 臨時專注
-- 等待一小段時間
-- 不想創建 todo 的短時間段
-
-## Timer UI
-
-timer 會進入終端 TUI，大致內容包括：
-
-```text
-to-see-my-life
-
-寫 Rust CLI
-Focus  14:00 - 15:00
-
-progress
-
-Remaining: 00:42:18
-Focused:   00:17:42
-Now:       14:17:42
-
-[q] quit
-```
-
-如果 todo 尚未開始：
-
-```text
-Starts in: 00:03:12
-Remaining: 01:03:12
-Focused:   00:00:00
+```powershell
+tsml.exe stats --week
 ```
 
 ## Current Limitations
 
-第一版有意保持簡單，因此有以下限制：
-
 - timer 不是後台服務，終端關閉後計時停止
-- 系統通知目前不做可配置開關
-- todo 不能編輯或刪除
-- todo 衝突不會被阻止，例如可以創建重疊時間段
-- Markdown 模板暫時固定
-- TUI timer 還沒有純文本測試模式
-- E2E 測試文檔已設計，但測試代碼尚未落地
+- 自定義 review 模板尚未支持
 
-## Development Notes
-
-主要源碼文件：
-
-```text
-src/main.rs    command dispatch
-src/cli.rs     clap command definitions
-src/config.rs  .config/config.toml and todos.json paths
-src/review.rs  daily review Markdown generation
-src/todo.rs    todo model, JSON persistence, scheduling
-src/timer.rs   TUI countdown and notification
-src/util.rs    time and duration parsing helpers
-```
-
-目前已通過的驗證：
-
-```powershell
-cargo check
-cargo test
-cargo build --release
-target\release\tsml.exe --help
-```
-
-E2E 測試設計見：
-
-```text
-docs/e2e-test-plan.md
-```
