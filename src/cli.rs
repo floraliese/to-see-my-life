@@ -1,3 +1,10 @@
+// cli — 命令行參數定義，基於 clap derive。
+// 定義 tsml 的所有子命令、標誌和參數，不包含業務邏輯。
+// 子命令包括：init, config, review, todo(today)/add/list/done/cancel/
+// delete/edit/reschedule, timer(title,duration,plain,no_notify),
+// Today, Stats(week)。
+// 新增子命令後需同步修改 main.rs 的 dispatch 和對應模塊的實現。
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -35,6 +42,20 @@ pub enum Commands {
         /// Duration for standalone mode, for example 25m, 1h, or 1h30m.
         #[arg(short, long)]
         duration: Option<String>,
+        /// Print timer progress as plain text instead of opening the TUI.
+        #[arg(long)]
+        plain: bool,
+        /// Skip desktop notifications when the timer finishes.
+        #[arg(long)]
+        no_notify: bool,
+    },
+    /// Show today's plan and progress.
+    Today,
+    /// Show personal productivity statistics.
+    Stats {
+        /// Show statistics for the current week.
+        #[arg(long)]
+        week: bool,
     },
 }
 
@@ -58,6 +79,9 @@ pub enum TodoCommand {
         /// Duration, for example 30m, 1h, or 1h30m.
         #[arg(short, long)]
         duration: Option<String>,
+        /// Allow overlapping an existing open todo.
+        #[arg(long)]
+        force: bool,
     },
     /// List scheduled todos in start-time order.
     List {
@@ -67,4 +91,37 @@ pub enum TodoCommand {
     },
     /// Mark a todo as done. If omitted, choose from active/scheduled todos.
     Done { id: Option<String> },
+    /// Mark a todo as cancelled while keeping it in history.
+    Cancel { id: Option<String> },
+    /// Delete a todo permanently.
+    Delete {
+        id: String,
+        /// Delete without asking for confirmation.
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Edit a todo title, start time, or duration.
+    Edit {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        start: Option<String>,
+        #[arg(long)]
+        duration: Option<String>,
+        /// Allow overlapping an existing open todo.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Move a todo to a new time block.
+    Reschedule {
+        id: String,
+        #[arg(long)]
+        start: String,
+        #[arg(long)]
+        duration: Option<String>,
+        /// Allow overlapping an existing open todo.
+        #[arg(long)]
+        force: bool,
+    },
 }

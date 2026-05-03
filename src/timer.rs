@@ -1,3 +1,11 @@
+// timer — 倒計時器。
+// 支持兩種模式：
+//   - todo timer：自動查找當前或下一個 scheduled todo 並啟動倒計時。
+//   - standalone timer：不關聯 todo，純粹倒計時。
+// 默認使用 TUI (ratatui + crossterm) 全屏顯示，支持 --plain 純文本模式
+// 用於測試或簡單場景，以及 --no-notify 跳過系統通知。
+// timer 不是後台服務，終端關閉後計時停止。
+
 use std::{
     io,
     time::{Duration as StdDuration, Instant},
@@ -18,10 +26,10 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
-use crate::{todo, util::parse_duration_minutes};
+use crate::{todo, util::parse_duration_seconds};
 
 struct TimerSession {
     title: String,
@@ -35,15 +43,24 @@ enum TimerOutcome {
     Quit,
 }
 
-pub fn run_timer(title_arg: Option<String>, duration_arg: Option<String>) -> Result<()> {
+pub fn run_timer(
+    title_arg: Option<String>,
+    duration_arg: Option<String>,
+    plain: bool,
+    no_notify: bool,
+) -> Result<()> {
     let session = match duration_arg {
         Some(duration) => standalone_session(title_arg, &duration)?,
         None => todo_session()?,
     };
 
-    let outcome = run_tui(&session)?;
+    let outcome = if plain {
+        run_plain(&session)?
+    } else {
+        run_tui(&session)?
+    };
 
-    if matches!(outcome, TimerOutcome::Completed) {
+    if matches!(outcome, TimerOutcome::Completed) && !no_notify {
         notify_finished(&session.title);
     }
 
@@ -64,9 +81,9 @@ pub fn run_timer(title_arg: Option<String>, duration_arg: Option<String>) -> Res
 }
 
 fn standalone_session(title_arg: Option<String>, duration_arg: &str) -> Result<TimerSession> {
-    let minutes = parse_duration_minutes(duration_arg)?;
+    let seconds = parse_duration_seconds(duration_arg)?;
     let start = Local::now();
-    let end = start + Duration::minutes(minutes);
+    let end = start + Duration::seconds(seconds);
     Ok(TimerSession {
         title: title_arg.unwrap_or_else(|| "Timer".to_string()),
         start,
@@ -88,6 +105,43 @@ fn todo_session() -> Result<TimerSession> {
         end: todo.end,
         todo_id: Some(todo.id),
     })
+}
+
+fn run_plain(session: &TimerSession) -> Result<TimerOutcome> {
+    loop {
+        let now = Local::now();
+        let remaining = (session.end - now).num_seconds().max(0);
+        let focused = if now > session.start {
+            (now.min(session.end) - session.start).num_seconds().max(0)
+        } else {
+            0
+        };
+
+        if now < session.start {
+            println!(
+                "{} | starts in {} | remaining {} | focused {}",
+                session.title,
+                format_seconds((session.start - now).num_seconds()),
+                format_seconds(remaining),
+                format_seconds(focused)
+            );
+        } else {
+            println!(
+                "{} | remaining {} | focused {} | now {}",
+                session.title,
+                format_seconds(remaining),
+                format_seconds(focused),
+                now.format("%H:%M:%S")
+            );
+        }
+
+        if now >= session.end {
+            println!("Timer finished: {}", session.title);
+            return Ok(TimerOutcome::Completed);
+        }
+
+        std::thread::sleep(StdDuration::from_secs(1));
+    }
 }
 
 fn run_tui(session: &TimerSession) -> Result<TimerOutcome> {
@@ -151,7 +205,6 @@ fn draw(frame: &mut ratatui::Frame, session: &TimerSession, now: DateTime<Local>
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(3),
             Constraint::Length(5),
             Constraint::Length(3),
             Constraint::Min(1),
@@ -179,19 +232,6 @@ fn draw(frame: &mut ratatui::Frame, session: &TimerSession, now: DateTime<Local>
     .alignment(Alignment::Center);
     frame.render_widget(title, chunks[0]);
 
-    let total = (session.end - session.start).num_seconds().max(1) as f64;
-    let elapsed = if now < session.start {
-        0.0
-    } else {
-        (now - session.start).num_seconds().max(0) as f64
-    };
-    let ratio = (elapsed / total).clamp(0.0, 1.0);
-    let gauge = Gauge::default()
-        .block(Block::default().borders(Borders::ALL).title(" progress "))
-        .gauge_style(Style::default().fg(Color::Green))
-        .ratio(ratio);
-    frame.render_widget(gauge, chunks[1]);
-
     let remaining_to_start = (session.start - now).num_seconds();
     let remaining_to_end = (session.end - now).num_seconds().max(0);
     let focused = if now > session.start {
@@ -217,14 +257,14 @@ fn draw(frame: &mut ratatui::Frame, session: &TimerSession, now: DateTime<Local>
         Paragraph::new(stats)
             .block(Block::default().borders(Borders::ALL).title(" timer "))
             .alignment(Alignment::Center),
-        chunks[2],
+        chunks[1],
     );
 
     frame.render_widget(
         Paragraph::new("[q] quit")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center),
-        chunks[3],
+        chunks[2],
     );
 }
 

@@ -1,10 +1,15 @@
+// review — 每日回顧模塊。
+// 互動式提問（做了什麼、完成了什麼目標、心情如何、明天想做什麼），
+// 並在 Markdown 文件末尾自動追加今日 todo 摘要（完成/過期/未完成數量與列表）。
+// 回顧文件保存在 config.notes_dir 目錄下，文件名為 YYYY-MM-DD-daily-review.md。
+
 use std::fs;
 
 use anyhow::{Context, Result};
 use chrono::Local;
 use dialoguer::{Input, theme::ColorfulTheme};
 
-use crate::config::AppConfig;
+use crate::{config::AppConfig, todo};
 
 pub fn run_review() -> Result<()> {
     let config = AppConfig::load_or_init()?;
@@ -30,6 +35,8 @@ pub fn run_review() -> Result<()> {
         .interact_text()?;
 
     let today = Local::now().date_naive();
+    let now = Local::now();
+    let todo_summary = todo::summarize_day(todo::load_todos()?, today, now).markdown(now);
     let file = config.notes_dir.join(format!("{}-daily-review.md", today));
     let content = format!(
         "\
@@ -50,6 +57,8 @@ pub fn run_review() -> Result<()> {
 ## 明天想做什麼？
 
 {tomorrow}
+
+{todo_summary}
 "
     );
 

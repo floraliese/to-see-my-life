@@ -1,3 +1,9 @@
+// config — 配置與數據文件路徑管理。
+// 默認使用 portable 模式，配置目錄為可執行文件同目錄下的 .config 文件夾；
+// 可設定環境變量 TSML_HOME 來覆蓋數據目錄，適用於測試或臨時隔離場景。
+// 所有模塊應通過 config_dir() / config_file() / todos_file() 獲取路徑，
+// 不直接拼接路徑字符串。
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -81,6 +87,10 @@ pub fn set_notes_dir(path: String) -> Result<()> {
 }
 
 pub fn config_dir() -> Result<PathBuf> {
+    if let Some(home) = std::env::var_os("TSML_HOME") {
+        return Ok(PathBuf::from(home));
+    }
+
     let exe = std::env::current_exe().context("failed to locate current executable")?;
     let exe_dir = exe
         .parent()
