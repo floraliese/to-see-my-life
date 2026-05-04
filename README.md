@@ -4,8 +4,10 @@
 
 - 記錄每日回顧，並生成 Markdown 文件（含自動 todo 摘要）
 - 創建帶時間段的 todo，支持 cancel / delete / edit / reschedule
+- 使用 `today` 作為 TODO / DOING / DONE 工作台管理當日任務
 - 使用終端倒計時界面執行 todo timer 或 standalone timer
-- 查看今日計畫、本週統計
+- 記錄 timer session history，並追加到每日回顧
+- 查看本週統計
 
 命令行入口名稱：
 
@@ -24,9 +26,11 @@ tsml.exe
 - `review`：互動式每日回顧 Markdown（含今日 todo 摘要）
 - `todo add / list / done / cancel / delete / edit / reschedule`：完整 todo 管理
 - `todo add / edit / reschedule --force`：繞過時間重疊檢查
+- `today add / start / done / defer`：今日工作台管理，支持把未完成 todo 延到明天
 - `timer`：為當前或下一個 todo 啟動倒計時 TUI
 - `timer --duration 25m --plain --no-notify`：standalone timer，支持純文本模式
-- `today`：顯示今日計畫
+- `timer_sessions.json`：記錄每次專注 session，review 會自動追加摘要
+- `today`：以 TODO / DOING / DONE 看板顯示今日工作台
 - `stats --week`：本週統計
 - `TSML_HOME` 環境變量：覆蓋數據目錄
 
@@ -65,6 +69,7 @@ cargo run -- todo list
 <exe 目錄>/.config/
   config.toml
   todos.json
+  timer_sessions.json
   notes/
 ```
 
@@ -107,6 +112,25 @@ notes_dir = "D:\\path\\to\\notes"
 
 todo 狀態：`scheduled`, `active`（即時計算）, `done`, `cancelled`, `expired`（即時計算）。
 
+`today add` 或 `today defer` 產生的任務可以暫時沒有 `start` / `end`，代表它位於工作台 TODO 欄，直到 `today start <id>` 才排程到現在並啟動專注。
+
+`timer_sessions.json`：
+
+```json
+[
+  {
+    "id": "e5f6a7b8",
+    "todo_id": "a1b2c3d4",
+    "title": "寫 Rust CLI",
+    "started_at": "2026-05-02T14:00:00+08:00",
+    "ended_at": "2026-05-02T15:00:00+08:00",
+    "planned_seconds": 3600,
+    "focused_seconds": 3600,
+    "outcome": "completed"
+  }
+]
+```
+
 ## Commands
 
 ### init
@@ -126,7 +150,7 @@ tsml.exe config set-notes-dir "D:\Obsidian vault\daily"
 
 ### review
 
-互動式生成每日回顧，末尾自動追加今日 todo 摘要（完成/過期/未完成數量與列表）。
+互動式生成每日回顧，末尾自動追加今日 todo 摘要和 timer session 摘要。
 
 ```powershell
 tsml.exe review
@@ -179,11 +203,19 @@ TUI 顯示：標題、階段（Scheduled/Focus）、開始-結束時間、剩餘
 
 ### today
 
-顯示今天的 todo 概覽：總預估時間、已專注、完成/過期/未完成/取消數量、下一個任務、詳細列表。
+以 TODO / DOING / DONE 看板顯示今日工作台，並提供當日任務管理入口。
 
 ```powershell
 tsml.exe today
+tsml.exe today add "整理 README" --duration 25m
+tsml.exe today start <id> --duration 25m
+tsml.exe today done <id>
+tsml.exe today defer <id> --to tomorrow
 ```
+
+`today start <id>` 會把任務排程到現在，移入 DOING，然後啟動終端 timer。timer 結束後會寫入 `timer_sessions.json`，並在關聯 todo 時詢問是否標記完成。
+
+手動 `today done` / `todo done` 只標記完成，不會自動補滿專注時間；專注時間只由 timer session 回寫。若 deferred 任務的目標日期已過，下一次打開 `today` 時會自動 carry over 到今天的 TODO 欄。
 
 ### stats --week
 
@@ -197,4 +229,3 @@ tsml.exe stats --week
 
 - timer 不是後台服務，終端關閉後計時停止
 - 自定義 review 模板尚未支持
-

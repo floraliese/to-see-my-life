@@ -7,12 +7,12 @@
 // timer 不是後台服務，終端關閉後計時停止。
 
 use std::{
-    io,
+    fs, io,
     time::{Duration as StdDuration, Instant},
 };
 
-use anyhow::{Result, anyhow};
-use chrono::{DateTime, Duration, Local};
+use anyhow::{Context, Result, anyhow};
+use chrono::{DateTime, Duration, Local, NaiveDate};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -28,8 +28,13 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-use crate::{todo, util::parse_duration_seconds};
+use crate::{
+    config, todo,
+    util::{format_minutes, parse_duration_seconds},
+};
 
 struct TimerSession {
     title: String,
@@ -38,9 +43,48 @@ struct TimerSession {
     todo_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimerSessionOutcome {
+    Completed,
+    Quit,
+}
+
+impl std::fmt::Display for TimerSessionOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            TimerSessionOutcome::Completed => "completed",
+            TimerSessionOutcome::Quit => "quit",
+        };
+        f.write_str(label)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimerSessionRecord {
+    pub id: String,
+    pub todo_id: Option<String>,
+    pub title: String,
+    pub started_at: DateTime<Local>,
+    pub ended_at: DateTime<Local>,
+    pub planned_seconds: i64,
+    pub focused_seconds: i64,
+    pub outcome: TimerSessionOutcome,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum TimerOutcome {
     Completed,
     Quit,
+}
+
+impl TimerOutcome {
+    fn session_outcome(&self) -> TimerSessionOutcome {
+        match self {
+            TimerOutcome::Completed => TimerSessionOutcome::Completed,
+            TimerOutcome::Quit => TimerSessionOutcome::Quit,
+        }
+    }
 }
 
 pub fn run_timer(
@@ -59,13 +103,17 @@ pub fn run_timer(
     } else {
         run_tui(&session)?
     };
+    let ended_at = Local::now();
+    let focused_seconds = focused_seconds(&session, ended_at);
+    record_timer_session(&session, &outcome, ended_at, focused_seconds)?;
 
     if matches!(outcome, TimerOutcome::Completed) && !no_notify {
         notify_finished(&session.title);
     }
 
     if let Some(id) = &session.todo_id {
-        let focused = focused_minutes(session.start, session.end);
+        // TODO(manager): keep the terminal timer mode, but record focus through TodoManager.
+        let focused = focused_minutes(focused_seconds);
         let done = if matches!(outcome, TimerOutcome::Completed) {
             Confirm::new()
                 .with_prompt("Mark this todo as done?")
@@ -77,6 +125,35 @@ pub fn run_timer(
         todo::update_todo_after_timer(id, done, focused)?;
     }
 
+    Ok(())
+}
+
+pub fn run_timer_for_todo(id: String, plain: bool, no_notify: bool) -> Result<()> {
+    let session = todo_session_by_id(&id)?;
+
+    let outcome = if plain {
+        run_plain(&session)?
+    } else {
+        run_tui(&session)?
+    };
+    let ended_at = Local::now();
+    let focused_seconds = focused_seconds(&session, ended_at);
+    record_timer_session(&session, &outcome, ended_at, focused_seconds)?;
+
+    if matches!(outcome, TimerOutcome::Completed) && !no_notify {
+        notify_finished(&session.title);
+    }
+
+    let focused = focused_minutes(focused_seconds);
+    let done = if matches!(outcome, TimerOutcome::Completed) {
+        Confirm::new()
+            .with_prompt("Mark this todo as done?")
+            .default(true)
+            .interact()?
+    } else {
+        false
+    };
+    todo::update_todo_after_timer(&id, done, focused)?;
     Ok(())
 }
 
@@ -93,6 +170,7 @@ fn standalone_session(title_arg: Option<String>, duration_arg: &str) -> Result<T
 }
 
 fn todo_session() -> Result<TimerSession> {
+    // TODO(manager): ask TodoManager for current/next timer todo instead of loading JSON here.
     let todos = todo::load_todos()?;
     let now = Local::now();
     let todo = todo::find_timer_todo(&todos, now).ok_or_else(|| {
@@ -101,9 +179,31 @@ fn todo_session() -> Result<TimerSession> {
 
     Ok(TimerSession {
         title: todo.title.clone(),
-        start: todo.start,
-        end: todo.end,
+        start: todo
+            .start
+            .ok_or_else(|| anyhow!("selected todo is not scheduled"))?,
+        end: todo
+            .end
+            .ok_or_else(|| anyhow!("selected todo is not scheduled"))?,
         todo_id: Some(todo.id),
+    })
+}
+
+fn todo_session_by_id(id: &str) -> Result<TimerSession> {
+    let todos = todo::load_todos()?;
+    let todo = todos
+        .into_iter()
+        .find(|todo| todo.id == id)
+        .ok_or_else(|| anyhow!("todo not found: {id}"))?;
+    Ok(TimerSession {
+        title: todo.title,
+        start: todo
+            .start
+            .ok_or_else(|| anyhow!("todo is not scheduled; use `tsml today start {id}` first"))?,
+        end: todo
+            .end
+            .ok_or_else(|| anyhow!("todo is not scheduled; use `tsml today start {id}` first"))?,
+        todo_id: Some(id.to_string()),
     })
 }
 
@@ -275,13 +375,101 @@ fn notify_finished(title: &str) {
         .show();
 }
 
-fn focused_minutes(start: DateTime<Local>, end: DateTime<Local>) -> i64 {
-    let now = Local::now().min(end);
-    if now <= start {
+pub fn load_timer_sessions() -> Result<Vec<TimerSessionRecord>> {
+    let path = config::timer_sessions_file()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn save_timer_sessions(sessions: &[TimerSessionRecord]) -> Result<()> {
+    let path = config::timer_sessions_file()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let raw =
+        serde_json::to_string_pretty(sessions).context("failed to serialize timer sessions")?;
+    fs::write(&path, format!("{raw}\n"))
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn record_timer_session(
+    session: &TimerSession,
+    outcome: &TimerOutcome,
+    ended_at: DateTime<Local>,
+    focused_seconds: i64,
+) -> Result<()> {
+    // Session history is append-only at the product level, but implemented as
+    // load-all/save-all for now to keep storage simple and consistent with todos.
+    config::ensure_timer_sessions_file()?;
+    let mut sessions = load_timer_sessions()?;
+    sessions.push(TimerSessionRecord {
+        id: Uuid::new_v4().simple().to_string()[..8].to_string(),
+        todo_id: session.todo_id.clone(),
+        title: session.title.clone(),
+        started_at: session.start,
+        ended_at,
+        planned_seconds: (session.end - session.start).num_seconds().max(0),
+        focused_seconds,
+        outcome: outcome.session_outcome(),
+    });
+    save_timer_sessions(&sessions)
+}
+
+pub fn timer_sessions_markdown(date: NaiveDate) -> Result<String> {
+    // Review groups sessions by their planned/recorded start date. A session
+    // crossing midnight currently remains on the day it started.
+    let mut sessions: Vec<_> = load_timer_sessions()?
+        .into_iter()
+        .filter(|session| session.started_at.date_naive() == date)
+        .collect();
+    sessions.sort_by_key(|session| session.started_at);
+
+    let total_seconds: i64 = sessions.iter().map(|session| session.focused_seconds).sum();
+    let mut content = format!(
+        "## 今日專注記錄\n\n- Session 數：{}\n- 總專注：{}\n\n",
+        sessions.len(),
+        format_minutes(minutes_from_seconds(total_seconds))
+    );
+    content.push_str("### Sessions\n\n");
+
+    if sessions.is_empty() {
+        content.push_str("- 今天沒有 timer session。\n");
+    } else {
+        for session in &sessions {
+            content.push_str(&format!(
+                "- [{}] {}-{} {} ({})\n",
+                session.outcome,
+                session.started_at.format("%H:%M"),
+                session.ended_at.format("%H:%M"),
+                session.title,
+                format_minutes(minutes_from_seconds(session.focused_seconds))
+            ));
+        }
+    }
+
+    Ok(content)
+}
+
+fn focused_seconds(session: &TimerSession, ended_at: DateTime<Local>) -> i64 {
+    let finished_at = ended_at.min(session.end);
+    if finished_at <= session.start {
         0
     } else {
-        (now - start).num_minutes()
+        (finished_at - session.start).num_seconds().max(0)
     }
+}
+
+fn focused_minutes(seconds: i64) -> i64 {
+    minutes_from_seconds(seconds)
+}
+
+fn minutes_from_seconds(seconds: i64) -> i64 {
+    if seconds <= 0 { 0 } else { (seconds + 59) / 60 }
 }
 
 fn format_seconds(seconds: i64) -> String {

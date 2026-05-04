@@ -13,7 +13,7 @@ mod util;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Commands, ConfigCommand, TodoCommand};
+use cli::{Cli, Commands, ConfigCommand, TodayCommand, TodoCommand};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -58,7 +58,22 @@ fn main() -> Result<()> {
             plain,
             no_notify,
         } => timer::run_timer(title, duration, plain, no_notify)?,
-        Commands::Today => todo::print_today()?,
+        Commands::Today { command } => match command {
+            Some(TodayCommand::Add { title, duration }) => todo::add_today_todo(title, duration)?,
+            Some(TodayCommand::Start {
+                id,
+                duration,
+                force,
+                plain,
+                no_notify,
+            }) => {
+                todo::start_today_todo(&id, duration, force)?;
+                timer::run_timer_for_todo(id, plain, no_notify)?;
+            }
+            Some(TodayCommand::Done { id }) => todo::mark_done(Some(id))?,
+            Some(TodayCommand::Defer { id, to }) => todo::defer_todo(id, to)?,
+            None => todo::print_today()?,
+        },
         Commands::Stats { week } => stats::print_stats(week)?,
     }
 

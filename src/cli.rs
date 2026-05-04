@@ -2,7 +2,7 @@
 // 定義 tsml 的所有子命令、標誌和參數，不包含業務邏輯。
 // 子命令包括：init, config, review, todo(today)/add/list/done/cancel/
 // delete/edit/reschedule, timer(title,duration,plain,no_notify),
-// Today, Stats(week)。
+// Today(add/start/done/defer), Stats(week)。
 // 新增子命令後需同步修改 main.rs 的 dispatch 和對應模塊的實現。
 
 use clap::{Parser, Subcommand};
@@ -49,8 +49,11 @@ pub enum Commands {
         #[arg(long)]
         no_notify: bool,
     },
-    /// Show today's plan and progress.
-    Today,
+    /// Show or manage today's workbench.
+    Today {
+        #[command(subcommand)]
+        command: Option<TodayCommand>,
+    },
     /// Show personal productivity statistics.
     Stats {
         /// Show statistics for the current week.
@@ -123,5 +126,42 @@ pub enum TodoCommand {
         /// Allow overlapping an existing open todo.
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TodayCommand {
+    /// Add an unscheduled todo to today's workbench.
+    Add {
+        /// Todo title.
+        title: String,
+        /// Estimated focus duration, for example 25m, 1h, or 1h30m.
+        #[arg(short, long)]
+        duration: Option<String>,
+    },
+    /// Move a todo into Doing by scheduling it now, then start the terminal timer.
+    Start {
+        id: String,
+        /// Override the todo estimate before starting.
+        #[arg(short, long)]
+        duration: Option<String>,
+        /// Allow overlapping an existing open todo.
+        #[arg(long)]
+        force: bool,
+        /// Print timer progress as plain text instead of opening the TUI.
+        #[arg(long)]
+        plain: bool,
+        /// Skip desktop notifications when the timer finishes.
+        #[arg(long)]
+        no_notify: bool,
+    },
+    /// Mark a todo done from the today workbench.
+    Done { id: String },
+    /// Defer an unfinished todo to another day.
+    Defer {
+        id: String,
+        /// Target day: tomorrow, today, or YYYY-MM-DD.
+        #[arg(long, default_value = "tomorrow")]
+        to: String,
     },
 }

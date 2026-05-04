@@ -49,6 +49,7 @@ pub fn init_config_interactive() -> Result<AppConfig> {
     let config = AppConfig { notes_dir };
     write_config(&config)?;
     ensure_todos_file()?;
+    ensure_timer_sessions_file()?;
 
     println!("Initialized {}", config_file()?.display());
     Ok(config)
@@ -59,6 +60,7 @@ pub fn show_config() -> Result<()> {
     println!("config: {}", config_file()?.display());
     println!("notes_dir: {}", config.notes_dir.display());
     println!("todos: {}", todos_file()?.display());
+    println!("timer_sessions: {}", timer_sessions_file()?.display());
     Ok(())
 }
 
@@ -107,6 +109,10 @@ pub fn todos_file() -> Result<PathBuf> {
     Ok(config_dir()?.join("todos.json"))
 }
 
+pub fn timer_sessions_file() -> Result<PathBuf> {
+    Ok(config_dir()?.join("timer_sessions.json"))
+}
+
 fn read_config(path: &Path) -> Result<AppConfig> {
     let raw = fs::read_to_string(path)
         .with_context(|| format!("failed to read config file {}", path.display()))?;
@@ -122,6 +128,22 @@ fn write_config(config: &AppConfig) -> Result<()> {
 pub fn ensure_todos_file() -> Result<()> {
     let path = todos_file()?;
     if !path.exists() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        fs::write(&path, "[]\n").with_context(|| format!("failed to write {}", path.display()))?;
+    }
+    Ok(())
+}
+
+pub fn ensure_timer_sessions_file() -> Result<()> {
+    let path = timer_sessions_file()?;
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
         fs::write(&path, "[]\n").with_context(|| format!("failed to write {}", path.display()))?;
     }
     Ok(())

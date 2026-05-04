@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use dialoguer::{Input, theme::ColorfulTheme};
 
-use crate::{config::AppConfig, todo};
+use crate::{config::AppConfig, timer, todo};
 
 pub fn run_review() -> Result<()> {
     let config = AppConfig::load_or_init()?;
@@ -36,7 +36,11 @@ pub fn run_review() -> Result<()> {
 
     let today = Local::now().date_naive();
     let now = Local::now();
+    // TODO(manager): get this summary via TodoManager once todo management is extracted.
     let todo_summary = todo::summarize_day(todo::load_todos()?, today, now).markdown(now);
+    // Obsidian owns the free-form template for now; tsml only appends the
+    // structured facts it knows how to compute reliably.
+    let timer_summary = timer::timer_sessions_markdown(today)?;
     let file = config.notes_dir.join(format!("{}-daily-review.md", today));
     let content = format!(
         "\
@@ -59,6 +63,8 @@ pub fn run_review() -> Result<()> {
 {tomorrow}
 
 {todo_summary}
+
+{timer_summary}
 "
     );
 

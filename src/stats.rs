@@ -19,6 +19,7 @@ pub fn print_stats(week: bool) -> Result<()> {
 }
 
 fn print_weekly_stats() -> Result<()> {
+    // TODO(manager): weekly stats can keep its own aggregation, but should read via TodoManager later.
     let now = Local::now();
     let today = now.date_naive();
     let monday = today - Days::new((today.weekday().num_days_from_monday()) as u64);
@@ -28,7 +29,13 @@ fn print_weekly_stats() -> Result<()> {
     let week_todos: Vec<_> = todos
         .iter()
         .filter(|todo| {
-            let d = todo.start.date_naive();
+            // Unscheduled workbench items are counted on their workbench date;
+            // scheduled items are counted by their concrete start date.
+            let d = todo
+                .start
+                .map(|start| start.date_naive())
+                .or(todo.deferred_until)
+                .unwrap_or_else(|| todo.created_at.date_naive());
             d >= monday && d <= today
         })
         .cloned()
