@@ -10,6 +10,7 @@ mod stats;
 mod timer;
 mod todo;
 mod util;
+mod workbench;
 
 use anyhow::Result;
 use clap::Parser;
@@ -72,7 +73,7 @@ fn main() -> Result<()> {
             }
             Some(TodayCommand::Done { id }) => todo::mark_done(Some(id))?,
             Some(TodayCommand::Defer { id, to }) => todo::defer_todo(id, to)?,
-            None => todo::print_today()?,
+            None => workbench::print_today()?,
         },
         Commands::Stats { week } => stats::print_stats(week)?,
     }

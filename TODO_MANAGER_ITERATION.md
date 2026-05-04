@@ -101,3 +101,13 @@ CLI 可以打印衝突列表，GUI 可以在時間線上高亮衝突區塊。這
 - 打開 `today` 時，已過 deferred 日期的未完成 TODO 會自動 carry over 到今天。
 - timer 每次結束或退出都寫入 `timer_sessions.json`。
 - review 會追加今日 timer session 摘要。
+
+## GUI Branch Notes
+
+`gui-workbench-core` 分支先做一個低風險抽象：
+
+- 新增 `src/workbench.rs`，提供 `TodayWorkbench` 結構化模型。
+- `TodayWorkbench` 包含 `summary`、`todo`、`doing`、`done`、`carried_over_count`。
+- `workbench::load_today_workbench(now)` 負責載入 todos、執行逾期 carry-over、產生三欄模型。
+- `workbench::print_today()` 是 CLI presentation；未來 GUI 可以直接使用 `load_today_workbench`，不需要解析 CLI 輸出。
+- `todo.rs` 暫時仍保留 todo 存儲、狀態、摘要和變更命令，避免一次拆太多。

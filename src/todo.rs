@@ -5,7 +5,7 @@
 //   scheduled → cancelled（取消）
 // 提供 add/list/done/cancel/delete/edit/reschedule 等管理命令，
 // 以及 find_timer_todo / update_todo_after_timer 供 timer 模塊調用。
-// DaySummary 是今日摘要結構，同時被 today 和 review 模塊使用。
+// DaySummary 是今日摘要結構，同時被 workbench 和 review 模塊使用。
 // overlap 檢查確保同一時間段不會出現多個 open todo（可通過 --force 繞過）。
 // 下一輪迭代先保持 todo 作為核心模塊，在本文件內抽出 TodoManager，
 // 讓 CLI 交互變成 thin wrapper，核心管理邏輯返回結構化結果供 CLI/GUI 復用。
@@ -311,44 +311,6 @@ pub fn defer_todo(id: String, to_arg: String) -> Result<()> {
     Ok(())
 }
 
-pub fn print_today() -> Result<()> {
-    // TODO(manager): make today view consume TodoManager::summarize_day.
-    config::ensure_todos_file()?;
-    let now = Local::now();
-    let today = now.date_naive();
-    let mut todos = load_todos()?;
-    let carried_over = carry_over_due_todos(&mut todos, today);
-    if carried_over > 0 {
-        save_todos(&todos)?;
-    }
-    let summary = summarize_day(todos, today, now);
-
-    println!("Today workbench - {}", summary.date);
-    if carried_over > 0 {
-        println!("Carried over: {} deferred todo(s)", carried_over);
-    }
-    println!("Total planned: {}", format_minutes(summary.total_minutes));
-    println!("Focused: {}", format_minutes(summary.focused_minutes));
-    println!("Completed: {}", summary.completed_count);
-    println!("Expired: {}", summary.expired_count);
-    println!("Unfinished: {}", summary.unfinished_count);
-    println!("Cancelled: {}", summary.cancelled_count);
-    if let Some(next) = &summary.next {
-        println!("Next: {} {} {}", next.id, todo_time_label(next), next.title);
-    } else {
-        println!("Next: none");
-    }
-    println!();
-
-    if summary.todos.is_empty() {
-        println!("No todos today.");
-        return Ok(());
-    }
-
-    print_today_board(&summary.todos, now);
-    Ok(())
-}
-
 pub fn summarize_day(mut todos: Vec<Todo>, date: NaiveDate, now: DateTime<Local>) -> DaySummary {
     sort_todos(&mut todos);
     let todos: Vec<Todo> = todos
@@ -422,51 +384,7 @@ fn print_todo_line(todo: &Todo, now: DateTime<Local>) {
     );
 }
 
-fn print_today_board(todos: &[Todo], now: DateTime<Local>) {
-    let mut todo_col = Vec::new();
-    let mut doing_col = Vec::new();
-    let mut done_col = Vec::new();
-
-    for todo in todos {
-        match todo.effective_status(now) {
-            TodoStatus::Done => done_col.push(todo),
-            TodoStatus::Active => doing_col.push(todo),
-            TodoStatus::Cancelled => {}
-            _ => todo_col.push(todo),
-        }
-    }
-
-    print_today_section("TODO", &todo_col, now);
-    print_today_section("DOING", &doing_col, now);
-    print_today_section("DONE", &done_col, now);
-    println!();
-    println!("Commands:");
-    println!("  tsml today add \"Task\" --duration 25m");
-    println!("  tsml today start <id> [--duration 25m]");
-    println!("  tsml today done <id>");
-    println!("  tsml today defer <id> [--to tomorrow]");
-}
-
-fn print_today_section(label: &str, todos: &[&Todo], now: DateTime<Local>) {
-    println!("{label} ({})", todos.len());
-    if todos.is_empty() {
-        println!("  --");
-        return;
-    }
-
-    for todo in todos {
-        println!(
-            "  {}  {:<9}  {:<22}  {:<8}  {}",
-            todo.id,
-            todo.effective_status(now),
-            todo_time_label(todo),
-            format_minutes(todo.duration_minutes),
-            todo.title
-        );
-    }
-}
-
-fn todo_time_label(todo: &Todo) -> String {
+pub fn todo_time_label(todo: &Todo) -> String {
     match (todo.start, todo.end, todo.deferred_until) {
         (Some(start), Some(end), _) => {
             format!("{}-{}", start.format("%Y-%m-%d %H:%M"), end.format("%H:%M"))
@@ -487,20 +405,6 @@ fn todo_belongs_to_day(todo: &Todo, date: NaiveDate) -> bool {
         || (todo.start.is_none()
             && todo.deferred_until.is_none()
             && todo.created_at.date_naive() == date)
-}
-
-fn carry_over_due_todos(todos: &mut [Todo], today: NaiveDate) -> usize {
-    let mut count = 0;
-    for todo in todos {
-        if !matches!(todo.status, TodoStatus::Done | TodoStatus::Cancelled)
-            && todo.start.is_none()
-            && todo.deferred_until.is_some_and(|date| date < today)
-        {
-            todo.deferred_until = Some(today);
-            count += 1;
-        }
-    }
-    count
 }
 
 fn parse_defer_date(input: &str, today: NaiveDate) -> Result<NaiveDate> {
