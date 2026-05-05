@@ -210,12 +210,25 @@ pub fn list_todos(all: bool) -> Result<()> {
 }
 
 pub fn add_today_todo(title: String, duration_arg: Option<String>) -> Result<()> {
+    let todo = add_today_todo_record(title, duration_arg, Local::now())?;
+    println!(
+        "Added {} to today's TODO [{}].",
+        todo.title,
+        format_minutes(todo.duration_minutes)
+    );
+    Ok(())
+}
+
+pub fn add_today_todo_record(
+    title: String,
+    duration_arg: Option<String>,
+    now: DateTime<Local>,
+) -> Result<Todo> {
     config::ensure_todos_file()?;
     if title.trim().is_empty() {
         return Err(anyhow!("todo title cannot be empty"));
     }
 
-    let now = Local::now();
     let duration_minutes = match duration_arg {
         Some(value) => parse_duration_minutes(&value)?,
         None => 25,
@@ -239,17 +252,28 @@ pub fn add_today_todo(title: String, duration_arg: Option<String>) -> Result<()>
     todos.push(todo.clone());
     sort_todos(&mut todos);
     save_todos(&todos)?;
-    println!(
-        "Added {} to today's TODO [{}].",
-        todo.title,
-        format_minutes(todo.duration_minutes)
-    );
-    Ok(())
+    Ok(todo)
 }
 
 pub fn start_today_todo(id: &str, duration_arg: Option<String>, force: bool) -> Result<Todo> {
+    let edited = schedule_today_todo(id, duration_arg, force, Local::now())?;
+    println!(
+        "Started {id} [{}].",
+        edited
+            .start
+            .map(|start| start.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "--".to_string())
+    );
+    Ok(edited)
+}
+
+pub fn schedule_today_todo(
+    id: &str,
+    duration_arg: Option<String>,
+    force: bool,
+    now: DateTime<Local>,
+) -> Result<Todo> {
     config::ensure_todos_file()?;
-    let now = Local::now();
     let mut todos = load_todos()?;
     let index = find_todo_index(&todos, id)?;
     let mut edited = todos[index].clone();
@@ -279,22 +303,22 @@ pub fn start_today_todo(id: &str, duration_arg: Option<String>, force: bool) -> 
     todos[index] = edited.clone();
     sort_todos(&mut todos);
     save_todos(&todos)?;
-    println!(
-        "Started {id} [{}].",
-        edited
-            .start
-            .map(|start| start.format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_else(|| "--".to_string())
-    );
     Ok(edited)
 }
 
 pub fn defer_todo(id: String, to_arg: String) -> Result<()> {
+    let target_date = defer_todo_record(&id, &to_arg, Local::now().date_naive())?
+        .deferred_until
+        .expect("deferred todo has target date");
+    println!("Deferred {id} to {target_date}.");
+    Ok(())
+}
+
+pub fn defer_todo_record(id: &str, to_arg: &str, today: NaiveDate) -> Result<Todo> {
     config::ensure_todos_file()?;
-    let today = Local::now().date_naive();
     let target_date = parse_defer_date(&to_arg, today)?;
     let mut todos = load_todos()?;
-    let todo = find_todo_mut(&mut todos, &id)?;
+    let todo = find_todo_mut(&mut todos, id)?;
 
     if matches!(todo.status, TodoStatus::Done | TodoStatus::Cancelled) {
         return Err(anyhow!("cannot defer a closed todo: {id}"));
@@ -306,9 +330,9 @@ pub fn defer_todo(id: String, to_arg: String) -> Result<()> {
     todo.end = None;
     todo.status = TodoStatus::Scheduled;
     todo.deferred_until = Some(target_date);
+    let updated = todo.clone();
     save_todos(&todos)?;
-    println!("Deferred {id} to {target_date}.");
-    Ok(())
+    Ok(updated)
 }
 
 pub fn summarize_day(mut todos: Vec<Todo>, date: NaiveDate, now: DateTime<Local>) -> DaySummary {
@@ -422,23 +446,28 @@ fn parse_defer_date(input: &str, today: NaiveDate) -> Result<NaiveDate> {
 pub fn mark_done(id_arg: Option<String>) -> Result<()> {
     // TODO(manager): keep optional interactive selection here, move mutation into TodoManager::done.
     config::ensure_todos_file()?;
-    let mut todos = load_todos()?;
+    let todos = load_todos()?;
     let id = match id_arg {
         Some(value) => value,
         None => choose_open_todo(&todos)?,
     };
 
-    let todo = todos
-        .iter_mut()
-        .find(|todo| todo.id == id)
-        .ok_or_else(|| anyhow!("todo not found: {id}"))?;
+    mark_done_by_id(&id)?;
+    println!("Marked {id} done.");
+    Ok(())
+}
+
+pub fn mark_done_by_id(id: &str) -> Result<Todo> {
+    config::ensure_todos_file()?;
+    let mut todos = load_todos()?;
+    let index = find_todo_index(&todos, id)?;
     // Manual completion is allowed as a personal-management escape hatch, but
     // it must not synthesize focus time. Timer completion records focus through
     // update_todo_after_timer and timer_sessions.json.
-    todo.status = TodoStatus::Done;
+    todos[index].status = TodoStatus::Done;
+    let updated = todos[index].clone();
     save_todos(&todos)?;
-    println!("Marked {id} done.");
-    Ok(())
+    Ok(updated)
 }
 
 pub fn cancel_todo(id_arg: Option<String>) -> Result<()> {
@@ -612,22 +641,28 @@ pub fn find_timer_todo(todos: &[Todo], now: DateTime<Local>) -> Option<Todo> {
 
 pub fn update_todo_after_timer(id: &str, done: bool, focused_minutes: i64) -> Result<()> {
     // TODO(manager): rename conceptually to record_focus and return the updated Todo.
-    let mut todos = load_todos()?;
-    if let Some(todo) = todos.iter_mut().find(|todo| todo.id == id) {
-        let focused = (todo.focused_minutes + focused_minutes)
-            .min(todo.duration_minutes)
-            .max(0);
-        todo.focused_minutes = focused;
-        todo.status = if done {
-            TodoStatus::Done
-        } else if todo.end.map(|end| Local::now() >= end).unwrap_or(false) {
-            TodoStatus::Expired
-        } else {
-            TodoStatus::Scheduled
-        };
-        save_todos(&todos)?;
-    }
+    let _ = record_focus_for_todo(id, done, focused_minutes)?;
     Ok(())
+}
+
+pub fn record_focus_for_todo(id: &str, done: bool, focused_minutes: i64) -> Result<Todo> {
+    let mut todos = load_todos()?;
+    let index = find_todo_index(&todos, id)?;
+    let todo = &mut todos[index];
+    let focused = (todo.focused_minutes + focused_minutes)
+        .min(todo.duration_minutes)
+        .max(0);
+    todo.focused_minutes = focused;
+    todo.status = if done {
+        TodoStatus::Done
+    } else if todo.end.map(|end| Local::now() >= end).unwrap_or(false) {
+        TodoStatus::Expired
+    } else {
+        TodoStatus::Scheduled
+    };
+    let updated = todo.clone();
+    save_todos(&todos)?;
+    Ok(updated)
 }
 
 fn find_todo_index(todos: &[Todo], id: &str) -> Result<usize> {

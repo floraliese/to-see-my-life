@@ -5,10 +5,30 @@
 // 只做展示和簡單聚合，不修改 JSON 數據。
 
 use anyhow::Result;
-use chrono::{Datelike, Days, Local};
+use chrono::{DateTime, Datelike, Days, Local, NaiveDate};
 
 use crate::todo::{TodoStatus, load_todos, sort_todos};
 use crate::util::format_minutes;
+
+#[derive(Debug, Clone)]
+pub struct WeeklyStats {
+    pub monday: NaiveDate,
+    pub today: NaiveDate,
+    pub total_count: usize,
+    pub completed_count: usize,
+    pub expired_count: usize,
+    pub unfinished_count: usize,
+    pub cancelled_count: usize,
+    pub planned_minutes: i64,
+    pub focused_minutes: i64,
+    pub top_tasks: Vec<TaskFrequency>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskFrequency {
+    pub title: String,
+    pub count: usize,
+}
 
 pub fn print_stats(week: bool) -> Result<()> {
     if week {
@@ -21,6 +41,33 @@ pub fn print_stats(week: bool) -> Result<()> {
 fn print_weekly_stats() -> Result<()> {
     // TODO(manager): weekly stats can keep its own aggregation, but should read via TodoManager later.
     let now = Local::now();
+    let stats = load_weekly_stats(now)?;
+
+    println!(
+        "{} - {} ({})\n",
+        stats.monday.format("%Y-%m-%d"),
+        stats.today.format("%Y-%m-%d"),
+        stats.today.format("%A")
+    );
+    println!("Todos:     {} total", stats.total_count);
+    println!("Completed: {}", stats.completed_count);
+    println!("Expired:   {}", stats.expired_count);
+    println!("Unfinished:{}", stats.unfinished_count);
+    println!("Cancelled: {}", stats.cancelled_count);
+    println!("Planned:   {}", format_minutes(stats.planned_minutes));
+    println!("Focused:   {}", format_minutes(stats.focused_minutes));
+
+    if !stats.top_tasks.is_empty() {
+        println!("\nTop tasks:");
+        for task in &stats.top_tasks {
+            println!("  {}x  {}", task.count, task.title);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn load_weekly_stats(now: DateTime<Local>) -> Result<WeeklyStats> {
     let today = now.date_naive();
     let monday = today - Days::new((today.weekday().num_days_from_monday()) as u64);
 
@@ -81,28 +128,25 @@ fn print_weekly_stats() -> Result<()> {
     }
     let mut top_titles: Vec<_> = title_counts.into_iter().collect();
     top_titles.sort_by_key(|(_, count)| -(*count as i64));
-    let top_titles = &top_titles[..top_titles.len().min(5)];
+    let top_tasks = top_titles
+        .into_iter()
+        .take(5)
+        .map(|(title, count)| TaskFrequency {
+            title: title.to_string(),
+            count,
+        })
+        .collect();
 
-    println!(
-        "{} - {} ({})\n",
-        monday.format("%Y-%m-%d"),
-        today.format("%Y-%m-%d"),
-        today.format("%A")
-    );
-    println!("Todos:     {} total", week_todos.len());
-    println!("Completed: {}", completed.len());
-    println!("Expired:   {}", expired.len());
-    println!("Unfinished:{}", unfinished.len());
-    println!("Cancelled: {}", cancelled.len());
-    println!("Planned:   {}", format_minutes(planned));
-    println!("Focused:   {}", format_minutes(focused));
-
-    if !top_titles.is_empty() {
-        println!("\nTop tasks:");
-        for (title, count) in top_titles {
-            println!("  {}x  {}", count, title);
-        }
-    }
-
-    Ok(())
+    Ok(WeeklyStats {
+        monday,
+        today,
+        total_count: week_todos.len(),
+        completed_count: completed.len(),
+        expired_count: expired.len(),
+        unfinished_count: unfinished.len(),
+        cancelled_count: cancelled.len(),
+        planned_minutes: planned,
+        focused_minutes: focused,
+        top_tasks,
+    })
 }

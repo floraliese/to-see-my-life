@@ -54,6 +54,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<TodayCommand>,
     },
+    /// Open the native desktop GUI workbench.
+    Gui,
     /// Show personal productivity statistics.
     Stats {
         /// Show statistics for the current week.

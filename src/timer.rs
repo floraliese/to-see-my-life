@@ -403,21 +403,44 @@ fn record_timer_session(
     ended_at: DateTime<Local>,
     focused_seconds: i64,
 ) -> Result<()> {
+    append_timer_session(
+        session.todo_id.clone(),
+        session.title.clone(),
+        session.start,
+        ended_at,
+        (session.end - session.start).num_seconds().max(0),
+        focused_seconds,
+        outcome.session_outcome(),
+    )?;
+    Ok(())
+}
+
+pub fn append_timer_session(
+    todo_id: Option<String>,
+    title: String,
+    started_at: DateTime<Local>,
+    ended_at: DateTime<Local>,
+    planned_seconds: i64,
+    focused_seconds: i64,
+    outcome: TimerSessionOutcome,
+) -> Result<TimerSessionRecord> {
     // Session history is append-only at the product level, but implemented as
     // load-all/save-all for now to keep storage simple and consistent with todos.
     config::ensure_timer_sessions_file()?;
     let mut sessions = load_timer_sessions()?;
-    sessions.push(TimerSessionRecord {
+    let record = TimerSessionRecord {
         id: Uuid::new_v4().simple().to_string()[..8].to_string(),
-        todo_id: session.todo_id.clone(),
-        title: session.title.clone(),
-        started_at: session.start,
+        todo_id,
+        title,
+        started_at,
         ended_at,
-        planned_seconds: (session.end - session.start).num_seconds().max(0),
-        focused_seconds,
-        outcome: outcome.session_outcome(),
-    });
-    save_timer_sessions(&sessions)
+        planned_seconds: planned_seconds.max(0),
+        focused_seconds: focused_seconds.max(0),
+        outcome,
+    };
+    sessions.push(record.clone());
+    save_timer_sessions(&sessions)?;
+    Ok(record)
 }
 
 pub fn timer_sessions_markdown(date: NaiveDate) -> Result<String> {

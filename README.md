@@ -1,11 +1,12 @@
 # to-see-my-life
 
-`to-see-my-life` 是一個本地優先的 Rust CLI 工具，用來在終端中管理時間和回顧：
+`to-see-my-life` 是一個本地優先的 Rust 個人管理工具，用來在終端和桌面 GUI 中管理時間和回顧：
 
 - 記錄每日回顧，並生成 Markdown 文件（含自動 todo 摘要）
 - 創建帶時間段的 todo，支持 cancel / delete / edit / reschedule
 - 使用 `today` 作為 TODO / DOING / DONE 工作台管理當日任務
 - 使用終端倒計時界面執行 todo timer 或 standalone timer
+- 使用 `gui` 打開 native desktop 工作台
 - 記錄 timer session history，並追加到每日回顧
 - 查看本週統計
 
@@ -31,6 +32,7 @@ tsml.exe
 - `timer --duration 25m --plain --no-notify`：standalone timer，支持純文本模式
 - `timer_sessions.json`：記錄每次專注 session，review 會自動追加摘要
 - `today`：以 TODO / DOING / DONE 看板顯示今日工作台
+- `gui`：native eframe/egui 桌面工作台，復用同一份本地數據
 - `stats --week`：本週統計
 - `TSML_HOME` 環境變量：覆蓋數據目錄
 
@@ -156,6 +158,26 @@ tsml.exe config set-notes-dir "D:\Obsidian vault\daily"
 tsml.exe review
 ```
 
+### gui
+
+打開 native desktop GUI。GUI 不是 Tauri/WebView，而是 `eframe/egui` 桌面窗口，直接讀寫與 CLI 相同的 `todos.json`、`timer_sessions.json` 和 `config.toml`。
+
+```powershell
+tsml.exe gui
+```
+
+目前 GUI 包含：
+
+- Today Workbench：TODO / DOING / DONE 三欄管理
+- 快速新增今日 todo
+- 從 todo 開始 GUI focus session，完成後寫入 `timer_sessions.json`
+- standalone focus session
+- 最近 session history
+- review markdown 預覽與複製
+- data directory / notes directory 管理
+
+終端 TUI timer 仍然保留；`today start <id>` 和 `timer` 命令會繼續使用終端專注模式。
+
 ### todo
 
 每個 todo 包含 title、start time、end time、duration、status、focused minutes。
@@ -228,4 +250,5 @@ tsml.exe stats --week
 ## Current Limitations
 
 - timer 不是後台服務，終端關閉後計時停止
+- GUI focus session 目前只在 GUI 進程內計時，尚未做崩潰恢復或後台 daemon
 - 自定義 review 模板尚未支持

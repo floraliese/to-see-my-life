@@ -30,6 +30,15 @@ impl AppConfig {
     }
 }
 
+pub fn load_config_if_exists() -> Result<Option<AppConfig>> {
+    let path = config_file()?;
+    if path.exists() {
+        read_config(&path).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn init_config_interactive() -> Result<AppConfig> {
     let dir = config_dir()?;
     fs::create_dir_all(&dir)
@@ -85,6 +94,16 @@ pub fn set_notes_dir(path: String) -> Result<()> {
     config.notes_dir = notes_dir;
     write_config(&config)?;
     println!("Updated notes_dir.");
+    Ok(())
+}
+
+pub fn set_notes_dir_path(notes_dir: PathBuf) -> Result<()> {
+    fs::create_dir_all(&notes_dir)
+        .with_context(|| format!("failed to create {}", notes_dir.display()))?;
+    let config = AppConfig { notes_dir };
+    write_config(&config)?;
+    ensure_todos_file()?;
+    ensure_timer_sessions_file()?;
     Ok(())
 }
 

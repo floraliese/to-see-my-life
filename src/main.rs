@@ -5,6 +5,7 @@
 
 mod cli;
 mod config;
+mod gui;
 mod review;
 mod stats;
 mod timer;
@@ -75,6 +76,7 @@ fn main() -> Result<()> {
             Some(TodayCommand::Defer { id, to }) => todo::defer_todo(id, to)?,
             None => workbench::print_today()?,
         },
+        Commands::Gui => gui::run_gui()?,
         Commands::Stats { week } => stats::print_stats(week)?,
     }
 
