@@ -7,11 +7,11 @@ use std::{path::PathBuf, time::Duration as StdDuration};
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Local};
-use eframe::egui::{self, Align, Color32, Layout, RichText, Stroke, Vec2};
+use eframe::egui::{self, Align, Color32, Layout, RichText, Stroke};
 use egui_extras::{Column, TableBuilder};
 
 use crate::{
-    config, stats, timer,
+    config, logging, stats, timer,
     timer::{TimerSessionOutcome, TimerSessionRecord},
     todo,
     util::{format_minutes, parse_duration_seconds},
@@ -30,6 +30,7 @@ enum View {
 struct GuiData {
     loaded_at: DateTime<Local>,
     data_dir: PathBuf,
+    log_file: PathBuf,
     notes_dir: Option<PathBuf>,
     workbench: TodayWorkbench,
     weekly: stats::WeeklyStats,
@@ -111,7 +112,6 @@ struct TsmlGuiApp {
     allow_overlap: bool,
     mark_done_after_focus: bool,
     message: Option<String>,
-    error: Option<String>,
 }
 
 impl TsmlGuiApp {
@@ -131,7 +131,6 @@ impl TsmlGuiApp {
             allow_overlap: false,
             mark_done_after_focus: true,
             message: None,
-            error: None,
         };
         app.refresh();
         app
@@ -141,10 +140,14 @@ impl TsmlGuiApp {
         match load_gui_data() {
             Ok(data) => {
                 self.data = Some(data);
-                self.error = None;
             }
             Err(err) => {
-                self.error = Some(format!("{err:#}"));
+                logging::append_timestamped_line_lossy(
+                    "gui.log",
+                    "ERROR",
+                    "refresh GUI data",
+                    &format!("{err:#}"),
+                );
             }
         }
     }
@@ -154,8 +157,8 @@ impl TsmlGuiApp {
         self.refresh();
     }
 
-    fn set_error(&mut self, err: anyhow::Error) {
-        self.error = Some(format!("{err:#}"));
+    fn log_error(&self, context: &str, err: impl std::fmt::Display) {
+        logging::append_timestamped_line_lossy("gui.log", "ERROR", context, &err.to_string());
     }
 
     fn add_today_todo(&mut self) {
@@ -167,7 +170,7 @@ impl TsmlGuiApp {
                 self.selected_id = Some(todo.id);
                 self.refresh_with_message("Todo added to today's workbench.");
             }
-            Err(err) => self.set_error(err),
+            Err(err) => self.log_error("add today todo", format!("{err:#}")),
         }
     }
 
@@ -191,10 +194,13 @@ impl TsmlGuiApp {
                     self.view = View::Today;
                     self.refresh_with_message("Focus session started.");
                 } else {
-                    self.error = Some("scheduled todo is missing start/end time".to_string());
+                    self.log_error(
+                        "start todo focus",
+                        "scheduled todo is missing start/end time",
+                    );
                 }
             }
-            Err(err) => self.set_error(err),
+            Err(err) => self.log_error("start todo focus", format!("{err:#}")),
         }
     }
 
@@ -211,23 +217,22 @@ impl TsmlGuiApp {
                 });
                 self.view = View::Today;
                 self.message = Some("Standalone focus started.".to_string());
-                self.error = None;
             }
-            Err(err) => self.set_error(err),
+            Err(err) => self.log_error("start standalone focus", format!("{err:#}")),
         }
     }
 
     fn mark_done(&mut self, id: &str) {
         match todo::mark_done_by_id(id) {
             Ok(_) => self.refresh_with_message("Todo marked done."),
-            Err(err) => self.set_error(err),
+            Err(err) => self.log_error("mark todo done", format!("{err:#}")),
         }
     }
 
     fn defer_tomorrow(&mut self, id: &str) {
         match todo::defer_todo_record(id, "tomorrow", Local::now().date_naive()) {
             Ok(_) => self.refresh_with_message("Todo deferred to tomorrow."),
-            Err(err) => self.set_error(err),
+            Err(err) => self.log_error("defer todo", format!("{err:#}")),
         }
     }
 
@@ -265,7 +270,7 @@ impl TsmlGuiApp {
                 self.active_focus = None;
                 self.refresh_with_message("Focus session recorded.");
             }
-            Err(err) => self.set_error(err),
+            Err(err) => self.log_error("finish focus session", format!("{err:#}")),
         }
     }
 
@@ -277,7 +282,7 @@ impl TsmlGuiApp {
             .and_then(|mut clipboard| clipboard.set_text(data.review_markdown.clone()))
         {
             Ok(()) => self.message = Some("Review markdown copied.".to_string()),
-            Err(err) => self.error = Some(format!("failed to copy review markdown: {err}")),
+            Err(err) => self.log_error("copy review markdown", err),
         }
     }
 
@@ -286,7 +291,7 @@ impl TsmlGuiApp {
             return;
         };
         if let Err(err) = open::that(&data.data_dir) {
-            self.error = Some(format!("failed to open data directory: {err}"));
+            self.log_error("open data directory", err);
         }
     }
 
@@ -297,10 +302,10 @@ impl TsmlGuiApp {
         match &data.notes_dir {
             Some(path) => {
                 if let Err(err) = open::that(path) {
-                    self.error = Some(format!("failed to open notes directory: {err}"));
+                    self.log_error("open notes directory", err);
                 }
             }
-            None => self.error = Some("notes_dir is not configured yet".to_string()),
+            None => self.log_error("open notes directory", "notes_dir is not configured yet"),
         }
     }
 
@@ -311,7 +316,7 @@ impl TsmlGuiApp {
         {
             match config::set_notes_dir_path(path) {
                 Ok(()) => self.refresh_with_message("Notes directory updated."),
-                Err(err) => self.set_error(err),
+                Err(err) => self.log_error("choose notes directory", format!("{err:#}")),
             }
         }
     }
@@ -338,23 +343,24 @@ impl TsmlGuiApp {
 }
 
 impl eframe::App for TsmlGuiApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.active_focus.is_some() {
-            ctx.request_repaint_after(StdDuration::from_millis(250));
+            ui.ctx()
+                .request_repaint_after(StdDuration::from_millis(250));
         }
 
-        egui::SidePanel::left("sidebar")
+        egui::Panel::left("sidebar")
             .resizable(false)
-            .exact_width(220.0)
-            .show(ctx, |ui| self.sidebar(ui));
+            .exact_size(220.0)
+            .show_inside(ui, |ui| self.sidebar(ui));
 
-        egui::SidePanel::right("inspector")
+        egui::Panel::right("inspector")
             .resizable(true)
-            .default_width(360.0)
-            .width_range(310.0..=460.0)
-            .show(ctx, |ui| self.inspector(ui));
+            .default_size(360.0)
+            .size_range(310.0..=460.0)
+            .show_inside(ui, |ui| self.inspector(ui));
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.view {
+        egui::CentralPanel::default().show_inside(ui, |ui| match self.view {
             View::Today => self.today_view(ui),
             View::Sessions => self.sessions_view(ui),
             View::Review => self.review_view(ui),
@@ -365,9 +371,7 @@ impl eframe::App for TsmlGuiApp {
 
 impl TsmlGuiApp {
     fn sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(10.0);
-        traffic_lights(ui);
-        ui.add_space(18.0);
+        ui.add_space(16.0);
         ui.label(RichText::new("tsml").size(30.0).strong());
         ui.label(RichText::new("to-see-my-life").color(muteds()));
         ui.add_space(22.0);
@@ -554,9 +558,12 @@ impl TsmlGuiApp {
             ui.heading("Storage");
             ui.add_space(6.0);
             path_row(ui, "Data", &data.data_dir);
+            path_row(ui, "Log", &data.log_file);
             match &data.notes_dir {
                 Some(path) => path_row(ui, "Notes", path),
-                None => ui.label(RichText::new("Notes: not configured").color(muteds())),
+                None => {
+                    ui.label(RichText::new("Notes: not configured").color(muteds()));
+                }
             };
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -712,9 +719,6 @@ impl TsmlGuiApp {
         if let Some(message) = &self.message {
             ui.label(RichText::new(message).color(accent()));
         }
-        if let Some(error) = &self.error {
-            ui.label(RichText::new(error).color(Color32::from_rgb(190, 54, 42)));
-        }
     }
 
     fn empty_state(&mut self, ui: &mut egui::Ui) {
@@ -741,9 +745,13 @@ fn load_gui_data() -> Result<GuiData> {
         timer::timer_sessions_markdown(now.date_naive())?
     );
 
+    let data_dir = config::config_dir()?;
+    let log_file = logging::log_file_path("gui.log")?;
+
     Ok(GuiData {
         loaded_at: now,
-        data_dir: config::config_dir()?,
+        log_file,
+        data_dir,
         notes_dir: config::load_config_if_exists()?.map(|config| config.notes_dir),
         workbench,
         weekly,
@@ -770,6 +778,7 @@ fn lane_ui(
         ui.add_space(8.0);
 
         egui::ScrollArea::vertical()
+            .id_salt(("workbench-lane", title))
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if todos.is_empty() {
@@ -929,7 +938,7 @@ fn header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
 fn nav_button(ui: &mut egui::Ui, view: &mut View, target: View, label: &str) {
     let selected = *view == target;
     if ui
-        .add_sized([180.0, 34.0], egui::SelectableLabel::new(selected, label))
+        .add_sized([180.0, 34.0], egui::Button::selectable(selected, label))
         .clicked()
     {
         *view = target;
@@ -965,27 +974,14 @@ fn path_row(ui: &mut egui::Ui, label: &str, path: &PathBuf) {
     });
 }
 
-fn traffic_lights(ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        color_dot(ui, Color32::from_rgb(255, 95, 86));
-        color_dot(ui, Color32::from_rgb(255, 189, 46));
-        color_dot(ui, Color32::from_rgb(39, 201, 63));
-    });
-}
-
-fn color_dot(ui: &mut egui::Ui, color: Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(12.0), egui::Sense::hover());
-    ui.painter().circle_filled(rect.center(), 6.0, color);
-}
-
 fn apply_macos_style(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.button_padding = egui::vec2(10.0, 6.0);
     style.visuals = egui::Visuals::light();
     style.visuals.panel_fill = Color32::from_rgb(242, 244, 247);
     style.visuals.window_fill = Color32::from_rgb(247, 248, 250);
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
 
 fn optional_text(value: &str) -> Option<String> {

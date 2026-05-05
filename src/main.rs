@@ -6,6 +6,7 @@
 mod cli;
 mod config;
 mod gui;
+mod logging;
 mod review;
 mod stats;
 mod timer;
